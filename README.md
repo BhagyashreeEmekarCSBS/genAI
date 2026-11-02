@@ -1,239 +1,148 @@
-# AgentFlow AI: Intelligent Multi-Agent Task Automation System
+# ⚡ AI Multi-Agent Software Development System (Debugged & Verified)
 
-> **Generative AI Practical Examination Project**  
-> Built with **LangGraph**, **Google Gemini**, **FastAPI**, and **React + Vite + Tailwind CSS**.
+An autonomous multi-agent software engineering framework developed using **Python**, **Google Gemini API** (`google-genai` SDK), **LangGraph**, and **Streamlit**.
 
-AgentFlow AI is a production-grade, autonomous multi-agent task automation system designed to solve complex multi-step user tasks. It features real conditional routing, structured task decomposition, dynamic step-by-step synthesis, and an automated **Self-Correction Quality Loop** that guarantees high-fidelity deliverables.
+The system simulates a collaborative software engineering team consisting of three specialized AI agents that execute sequentially with strict validation gates:
+1. **Agent 1: Requirement Analysis Agent (SRS)**
+2. **Agent 2: Code Generation Agent (Production Code)**
+3. **Agent 3: Code Review & Deterministic Python AST Validation Agent**
 
 ---
 
-## Architecture Overview
+## 🛠️ Root Causes & Implemented Fixes
+
+### 1. Google Gemini API Integration (`google-genai` SDK)
+- **Problem:** Missing or placeholder API keys caused `400 INVALID_ARGUMENT: API key not valid` errors, and the previous setup used deprecated or indirect wrappers without pre-flight validation.
+- **Fix:** 
+  - Integrated the official `google-genai` SDK (`from google import genai`).
+  - Securely reads `GEMINI_API_KEY` from `.env` via `python-dotenv`.
+  - Added an active **"🔌 Test Connection"** mechanism in the sidebar (`validate_api_connection`) to verify credentials and model accessibility before executing pipelines.
+  - Informative error handling for invalid keys, expired keys, model unavailability, and quota limits.
+
+### 2. Guard Gates & Downstream Execution Isolation
+- **Problem:** When Agent 1 failed, downstream agents still executed, producing cascading errors like `"Code generation could not proceed: SRS report is missing or invalid"`.
+- **Fix:**
+  - Implemented LangGraph conditional routing gates (`srs_validation_gate` and `code_validation_gate`).
+  - If Agent 1 fails or produces an empty/invalid SRS, the workflow halts immediately with status `Failed`.
+  - Downstream agents remain `Pending` / `Blocked` and are never executed without valid prerequisites.
+
+### 3. Accurate Deterministic AST Syntax Validation
+- **Problem:** Code Review Agent reported syntax errors when no code was generated (`No code present to validate`).
+- **Fix:**
+  - The AST validator now distinguishes between **code with syntax errors** and **code not yet generated**.
+  - When no code is available, it displays: `"Code generation has not completed yet. No code available for AST validation."`
+  - When Python code is analyzed, `ast.parse` pinpoints the exact line number, column offset, offending code snippet, and actionable suggested fixes.
+
+---
+
+## 🏗️ System Architecture & Workflow
 
 ```mermaid
 graph TD
-    Start([START]) --> Planner[Planner Agent<br/>Gemini 3.8 Flash]
-    Planner --> |Decomposes into 4-6 Steps| Executor[Execution Agent<br/>Gemini 3.8 Flash]
-    Executor --> |Synthesizes Comprehensive Deliverable| Reviewer[Reviewer Agent<br/>Gemini 3.8 Flash]
+    User([🚀 User Requirements Input]) --> AuthCheck{🔑 Pre-Flight API Check}
+    AuthCheck -- Failed --> AuthErr[🛑 Display API Authentication Error & Halt]
+    AuthCheck -- Verified --> Node1[📋 Agent 1: Requirement Analysis Agent]
     
-    Reviewer --> |Evaluates Completeness, Correctness, Clarity| Conditional{Quality Score >= 8?}
+    Node1 --> Gate1{🔍 SRS Validation Gate}
+    Gate1 -- Invalid / Error --> Halt1[🛑 Halt: Downstream Blocked]
+    Gate1 -- Valid SRS --> Node2[💻 Agent 2: Code Generation Agent]
     
-    Conditional --> |Score >= 8<br/>[APPROVED]| End([END: Final Output])
-    Conditional --> |Score < 8 AND Iteration < 3<br/>[REVISE]| LoopEdge[Self-Correction Router]
-    LoopEdge --> |Passes Reviewer Critique & Missing Requirements| Executor
-    Conditional --> |Iteration >= 3<br/>[MAX ATTEMPTS]| End
+    Node2 --> Gate2{🔍 Code Validation Gate}
+    Gate2 -- Empty / Error --> Halt2[🛑 Halt: Code Review Blocked]
+    Gate2 -- Valid Source Code --> Node3[🛡️ Agent 3: Code Review & AST Validation]
     
-    style Start fill:#f3e8ff,stroke:#7c3aed,stroke-width:2px;
-    style Planner fill:#ede9fe,stroke:#6d28d9,stroke-width:2px;
-    style Executor fill:#e0e7ff,stroke:#4338ca,stroke-width:2px;
-    style Reviewer fill:#fef3c7,stroke:#d97706,stroke-width:2px;
-    style Conditional fill:#fef08a,stroke:#ca8a04,stroke-width:2px;
-    style End fill:#d1fae5,stroke:#059669,stroke-width:2px;
-    style LoopEdge fill:#fee2e2,stroke:#dc2626,stroke-width:2px,stroke-dasharray: 5 5;
+    Node3 --> AST[🔬 Deterministic Python AST Compiler Check]
+    Node3 --> GeminiReview[📑 Deep AI Architectural Audit]
+    AST & GeminiReview --> Final[📊 Streamlit Tabs: SRS, Code, Review, Dossier]
+
+    classDef agent fill:#7928ca,stroke:#ff0080,stroke-width:2px,color:#fff;
+    classDef gate fill:#1e1b2e,stroke:#a855f7,stroke-width:2px,color:#cbd5e1;
+    classDef halt fill:#ef4444,stroke:#f87171,stroke-width:1px,color:#fff;
+    classDef success fill:#10b981,stroke:#34d399,stroke-width:2px,color:#fff;
+
+    class Node1,Node2,Node3 agent;
+    class Gate1,Gate2,AuthCheck gate;
+    class AuthErr,Halt1,Halt2 halt;
+    class Final success;
 ```
 
 ---
 
-## Agent Roles & Shared State
+## 📁 Project Structure
 
-### 1. Planner Agent (`backend/agents.py`)
-- **Model**: Google Gemini (`gemini-3.8-flash`)
-- **Function**: Ingests user directives, isolates core goals and quality requirements, and deconstructs the problem into 4–6 concrete, logical, sequential milestones.
-- **Output**: Structured JSON containing `identified_objectives`, `target_requirements`, and `steps` (step number, title, description, and deliverable).
-
-### 2. Execution Agent (`backend/agents.py`)
-- **Model**: Google Gemini
-- **Function**: Executes each planned milestone in depth, providing exhaustive solutions, structured code snippets, implementation roadmaps, or architectural guidelines.
-- **Self-Correction**: On revision cycles (iteration > 1), it reads the Reviewer Agent's previous critique, missing items, and improvement suggestions to revise and elevate the solution.
-
-### 3. Reviewer Agent (`backend/agents.py`)
-- **Model**: Google Gemini
-- **Function**: Serves as a strict Quality Assurance auditor evaluating outputs against:
-  1. *Task Completeness* (all plan steps addressed)
-  2. *Factual & Technical Correctness*
-  3. *Relevance to Prompt*
-  4. *Clarity, Organization & Polish*
-  5. *Plan Adherence*
-- **Scoring & Threshold**: 1–10 integer score. If `score >= 8`, decision is **APPROVE**. If `score < 8`, decision is **REVISE**.
-
-### 4. Shared LangGraph State (`backend/state.py`)
-```python
-class AgentFlowState(TypedDict):
-    user_task: str
-    plan: Optional[PlanOutput]
-    execution: str
-    review: Optional[ReviewOutput]
-    score: int                     # 1 to 10
-    feedback: str                  # Constructive critique
-    missing_requirements: List[str]# Specific missing elements
-    improvement_suggestions: List[str] # Actionable fixes
-    iteration: int                 # 1, 2, or 3
-    status: str                    # PLANNING, EXECUTING, REVIEWING, APPROVED, REVISING
-    execution_logs: List[LogEntry] # Progressive timeline entries
-    error: Optional[str]
+```
+multi_agent_development/
+│
+├── app.py                      # Main Streamlit Dashboard with Validation Guards
+├── test_suite.py               # 11 Unit Tests covering all Test Cases
+│
+├── agents/                     # Specialized AI Agents
+│   ├── __init__.py
+│   ├── requirement_agent.py    # Agent 1: Requirement Analysis & SRS
+│   ├── code_generation_agent.py# Agent 2: Modular Source Code Generation
+│   └── code_review_agent.py    # Agent 3: AST Audit & Review Report
+│
+├── workflow/                   # LangGraph StateGraph Orchestration
+│   ├── __init__.py
+│   ├── state.py                # TypedDict Shared State & Step Status Tracking
+│   └── graph.py                # StateGraph with Conditional Validation Gates
+│
+├── utils/                      # Core Utility Layer
+│   ├── __init__.py
+│   ├── llm.py                  # google-genai Integration & Connection Validator
+│   └── validators.py           # Python AST Compiler & SRS/Code Validators
+│
+├── outputs/                    # Output directory for exported files
+│   └── .gitkeep
+│
+├── .env                        # Local Environment Configuration (Ignored)
+├── .env.example                # Sample Environment Template
+├── .gitignore                  # Git Ignore Specifications
+├── requirements.txt            # Python Dependencies
+└── README.md                   # System Documentation & Technical Guide
 ```
 
 ---
 
-## Project Structure
+## 🔑 Environment Configuration
 
-```
-agentflow-ai/
-├── backend/
-│   ├── main.py              # FastAPI app, SSE streaming endpoints, background worker
-│   ├── agents.py            # Planner, Execution, Reviewer Gemini agents
-│   ├── graph.py             # LangGraph StateGraph, conditional routing logic
-│   ├── state.py             # TypedDict shared state schema
-│   ├── requirements.txt     # Backend Python dependencies
-│   ├── .env.example         # Template for environment variables
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── Navbar.jsx               # Header with API status & model badge
-│   │   │   ├── ApiKeyModal.jsx          # Secure in-browser Gemini API key setup
-│   │   │   ├── TaskInput.jsx            # Dynamic textarea, presets, validation
-│   │   │   ├── WorkflowVisualization.jsx# Interactive LangGraph node graph & loop
-│   │   │   ├── AgentStatusCards.jsx     # Live agent gauges, metrics & state
-│   │   │   ├── PlanStepsView.jsx        # Numbered step cards & deliverables
-│   │   │   ├── ExecutionLogs.jsx        # Real-time SSE telemetry log panel
-│   │   │   └── FinalOutputDashboard.jsx # Formatted deliverable, audit & export
-│   │   ├── services/
-│   │   │   └── api.js                   # Axios client & SSE stream connector
-│   │   ├── App.jsx                      # Main dashboard application
-│   │   ├── index.css                    # Tailwind CSS & custom styling
-│   │   └── main.jsx                     # React root mount
-│   ├── package.json
-│   ├── tailwind.config.js
-│   ├── vite.config.js
-├── README.md
-└── .gitignore
+Create or update `.env` in the workspace root or `multi_agent_development/`:
+
+```env
+GEMINI_API_KEY=your_actual_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
----
-
-## Installation & Setup
-
-### Prerequisites
-- Python 3.10+
-- Node.js 18+ and npm
+*(You can also paste the API key directly into the Streamlit sidebar field and click **"🔌 Test Connection"** to verify).*
 
 ---
 
-### Step 1: Configure Google Gemini API Key
+## 🧪 Automated Test Suite Verification
 
-1. Obtain a free API key from **[Google AI Studio](https://aistudio.google.com/app/apikey)**.
-2. In the `backend` directory, create a `.env` file from the example:
-   ```bash
-   cd agentflow-ai/backend
-   cp .env.example .env
-   ```
-3. Set your API key inside `backend/.env`:
-   ```ini
-   GEMINI_API_KEY=AIzaSy...your_actual_key...
-   GEMINI_MODEL=gemini-3.8-flash
-   HOST=0.0.0.0
-   PORT=8000
-   ```
-*(Note: You can also enter the Gemini API key directly in the web UI via the **"Configure API Key"** button).*
+Run the comprehensive unit test suite:
 
----
+```powershell
+python multi_agent_development/test_suite.py
+```
 
-### Step 2: Backend Setup & Execution
-
-1. Navigate to the backend directory:
-   ```bash
-   cd agentflow-ai/backend
-   ```
-2. (Optional) Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   # On Windows:
-   .\venv\Scripts\activate
-   # On Linux / macOS:
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Start the FastAPI server:
-   ```bash
-   python main.py
-   # Or with uvicorn directly:
-   uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-   The backend API will be live at `http://localhost:8000`.  
-   API Documentation is available at `http://localhost:8000/docs`.
+All 11 unit tests verify:
+- **Test Case 1:** Valid Python Code AST parsing (classes, functions, imports).
+- **Test Case 2:** Invalid / Missing API Key handling.
+- **Test Case 3:** Missing/Failed SRS halts downstream execution (`srs_validation_gate`).
+- **Test Case 4:** Invalid Python code detects syntax errors, line numbers, and suggested fix hints.
+- **Test Case 5:** Empty/pending code returns informative message without false syntax errors.
+- **Test Case 6:** Missing/Placeholder code halts code review (`code_validation_gate`).
+- **Test Case 7:** StateGraph compilation and edge integrity.
 
 ---
 
-### Step 3: Frontend Setup & Execution
+## 🚀 Running the Streamlit Application
 
-1. Open a new terminal and navigate to `frontend`:
-   ```bash
-   cd agentflow-ai/frontend
-   ```
-2. Install packages:
-   ```bash
-   npm install
-   ```
-3. Launch the Vite development server:
-   ```bash
-   npm run dev
-   ```
-4. Open your browser and navigate to:
-   ```
-   http://localhost:5173
-   ```
+Launch the application:
 
----
+```powershell
+streamlit run multi_agent_development/app.py --server.port 8501
+```
 
-## REST & SSE API Reference
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/workflow/health` | Verifies server health, active Gemini model, and API key status. |
-| `POST` | `/api/workflow/run` | Accepts user task and initiates background LangGraph workflow. Returns `workflow_id`. |
-| `GET` | `/api/workflow/stream/{workflow_id}` | Server-Sent Events (SSE) stream delivering real-time agent transitions, node events, and logs. |
-| `GET` | `/api/workflow/status/{workflow_id}` | Polls the current snapshot of a workflow state. |
-
----
-
-## Practical Examination Demonstration Instructions
-
-Follow this step-by-step script for an outstanding practical examination demo:
-
-### 1. Verification of System Health
-- Open `http://localhost:5173`.
-- Notice the **"Gemini API: Ready"** indicator in the navbar and the active model badge (`gemini-3.8-flash`).
-- Click **"Configure API Key"** in the top navigation to demonstrate client-side credential configuration with secure masking.
-
-### 2. Executing a Multi-Step Directive
-- Select one of the quick example prompts, e.g.:
-  > *"Create a 7-day Generative AI learning roadmap for a beginner with hands-on daily milestones and recommended resources."*
-- Click **"Execute LangGraph Workflow"** (or press <kbd>Ctrl + Enter</kbd>).
-
-### 3. Observing the Real-Time Multi-Agent Workflow
-1. **Interactive Workflow Diagram**:
-   - The **Planner Agent** node pulses indigo as it calls Gemini to decompose the task.
-   - Once completed, the node turns green with a checkmark, and the **Planner Blueprint** displays 4–6 numbered milestone cards with explicit deliverables.
-2. **Execution Agent Synthesis**:
-   - The **Execution Agent** node activates. The live telemetry logs stream each stage of synthesis.
-   - The formatted deliverable is generated with comprehensive depth.
-3. **Reviewer Agent Quality Audit**:
-   - The **Reviewer Agent** node activates to evaluate completeness, accuracy, clarity, and adherence.
-   - The live score meter updates (e.g., `8/10` or `9/10` with `[APPROVED]`, or `7/10` with `[REVISE]`).
-
-### 4. Demonstrating the Self-Correction Loop
-- If the Reviewer evaluates the initial attempt with a score < 8, observe:
-  - The **LangGraph Self-Correction Edge** triggers.
-  - A `self_correction_triggered` event is logged in the telemetry terminal.
-  - The **Execution Agent** starts **Attempt #2**, explicitly incorporating the reviewer's missing criteria and feedback to produce a superior version.
-
-### 5. Final Report Dashboard & Deliverable Export
-- Once approved (Score >= 8), a confetti animation triggers.
-- Inspect the **Final Output Dashboard**:
-  - Reviewer score gauge and critique analysis.
-  - Formatted markdown preview.
-  - Click **"Copy Solution"** to copy markdown output to clipboard.
-  - Click **"Download Report"** to export an audit report text file.
-  - Click **"New Task"** to reset and test another directive.
+Access the dashboard at:
+👉 **`http://localhost:8501`**
