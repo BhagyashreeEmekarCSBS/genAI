@@ -1,338 +1,161 @@
-import spacy
-import random
-from collections import defaultdict
-
-# Load spaCy English model
-nlp = spacy.load("en_core_web_sm")
-
-
-# ---------------------------------------------------------
-# 1. SPLIT PARAGRAPH INTO SENTENCES
-# ---------------------------------------------------------
-
-def split_sentences(paragraph):
-    doc = nlp(paragraph)
-
-    sentences = [sent.text.strip() for sent in doc.sents]
-
-    return sentences
-
-
-# ---------------------------------------------------------
-# 2. EXTRACT ENTITIES AND THEIR ROLES
-# ---------------------------------------------------------
-
-def extract_sentence_roles(sentence):
-
-    doc = nlp(sentence)
-
-    roles = {}
-
-    for token in doc:
-
-        # We consider nouns and proper nouns as entities
-        if token.pos_ in ["NOUN", "PROPN"]:
-
-            entity = token.text.lower()
-
-            # Subject
-            if token.dep_ in ["nsubj", "nsubjpass", "csubj"]:
-                role = "S"
-
-            # Object
-            elif token.dep_ in ["dobj", "obj", "pobj", "iobj"]:
-                role = "O"
-
-            # Other occurrence
-            else:
-                role = "X"
-
-            # If entity appears multiple times,
-            # prioritize Subject over Object over Other
-            if entity not in roles:
-                roles[entity] = role
-
-            else:
-                if role == "S":
-                    roles[entity] = "S"
-
-                elif role == "O" and roles[entity] == "X":
-                    roles[entity] = "O"
-
-    return roles
-
-
-# ---------------------------------------------------------
-# 3. BUILD ENTITY GRID
-# ---------------------------------------------------------
-
-def build_entity_grid(sentences):
-
-    sentence_roles = []
-
-    all_entities = set()
-
-    for sentence in sentences:
-
-        roles = extract_sentence_roles(sentence)
-
-        sentence_roles.append(roles)
-
-        all_entities.update(roles.keys())
-
-    # Sort entities alphabetically
-    entities = sorted(all_entities)
-
-    grid = []
-
-    for roles in sentence_roles:
-
-        row = []
-
-        for entity in entities:
-
-            if entity in roles:
-                row.append(roles[entity])
-            else:
-                row.append("-")
-
-        grid.append(row)
-
-    return entities, grid
-
-
-# ---------------------------------------------------------
-# 4. DISPLAY ENTITY GRID
-# ---------------------------------------------------------
-
-def display_grid(sentences, entities, grid):
-
-    print("\n" + "=" * 70)
-    print("ENTITY GRID")
-    print("=" * 70)
-
-    # Header
-    print(f"{'Sentence':<10}", end="")
-
-    for entity in entities:
-        print(f"{entity:<15}", end="")
-
-    print()
-
-    print("-" * (10 + 15 * len(entities)))
-
-    # Rows
-    for i, row in enumerate(grid):
-
-        print(f"S{i+1:<9}", end="")
-
-        for role in row:
-            print(f"{role:<15}", end="")
-
-        print()
-
-
-# ---------------------------------------------------------
-# 5. TRANSITION SCORING
-# ---------------------------------------------------------
-
-def transition_score(previous, current):
-
-    # Entity absent in either sentence
-    if previous == "-" or current == "-":
-        return 0
-
-    # Subject remains Subject
-    if previous == "S" and current == "S":
-        return 3
-
-    # Subject -> Object
-    if previous == "S" and current == "O":
-        return 2
-
-    # Object -> Subject
-    if previous == "O" and current == "S":
-        return 2
-
-    # Object -> Object
-    if previous == "O" and current == "O":
-        return 2
-
-    # Other -> Subject/Object
-    if previous == "X" and current in ["S", "O"]:
-        return 1
-
-    # Subject/Object -> Other
-    if previous in ["S", "O"] and current == "X":
-        return 1
-
-    # Other -> Other
-    if previous == "X" and current == "X":
-        return 1
-
-    return 0
-
-
-# ---------------------------------------------------------
-# 6. CALCULATE COHERENCE SCORE
-# ---------------------------------------------------------
-
-def calculate_coherence_score(grid):
-
-    if len(grid) < 2:
-        return 0
-
-    total_score = 0
-    transitions = 0
-
-    for i in range(len(grid) - 1):
-
-        current_sentence = grid[i]
-        next_sentence = grid[i + 1]
-
-        for previous_role, current_role in zip(
-            current_sentence,
-            next_sentence
-        ):
-
-            # Only count transitions where entity
-            # appears in both sentences
-            if previous_role != "-" and current_role != "-":
-
-                score = transition_score(
-                    previous_role,
-                    current_role
-                )
-
-                total_score += score
-
-                transitions += 1
-
-    if transitions == 0:
-        return 0
-
-    # Normalize score to 0-100
-    max_possible_score = transitions * 3
-
-    final_score = (total_score / max_possible_score) * 100
-
-    return round(final_score, 2)
-
-
-# ---------------------------------------------------------
-# 7. SHUFFLE SENTENCES
-# ---------------------------------------------------------
-
-def shuffle_sentences(sentences):
-
-    shuffled = sentences.copy()
-
-    random.shuffle(shuffled)
-
-    return shuffled
-
-
-# ---------------------------------------------------------
-# 8. MAIN PROGRAM
-# ---------------------------------------------------------
-
-def main():
-
-    print("\n" + "=" * 70)
-    print("ENTITY-GRID DISCOURSE COHERENCE SCORER")
-    print("=" * 70)
-
-    print("\nEnter your paragraph.")
-    print("Press ENTER after typing the paragraph.\n")
-
-    paragraph = input("Paragraph: ")
-
-    # ---------------------------------------------
-    # ORIGINAL PARAGRAPH
-    # ---------------------------------------------
-
-    sentences = split_sentences(paragraph)
-
-    print("\n\nORIGINAL PARAGRAPH")
-    print("-" * 70)
-
-    for i, sentence in enumerate(sentences):
-        print(f"S{i+1}: {sentence}")
-
-    entities, grid = build_entity_grid(sentences)
-
-    display_grid(sentences, entities, grid)
-
-    original_score = calculate_coherence_score(grid)
-
-    print("\nOriginal Coherence Score:",
-          original_score, "/ 100")
-
-    # ---------------------------------------------
-    # SHUFFLED PARAGRAPH
-    # ---------------------------------------------
-
-    shuffled = shuffle_sentences(sentences)
-
-    print("\n\nSHUFFLED PARAGRAPH")
-    print("-" * 70)
-
-    for i, sentence in enumerate(shuffled):
-        print(f"S{i+1}: {sentence}")
-
-    shuffled_entities, shuffled_grid = build_entity_grid(shuffled)
-
-    display_grid(
-        shuffled,
-        shuffled_entities,
-        shuffled_grid
-    )
-
-    shuffled_score = calculate_coherence_score(
-        shuffled_grid
-    )
-
-    print("\nShuffled Coherence Score:",
-          shuffled_score, "/ 100")
-
-    # ---------------------------------------------
-    # COMPARISON
-    # ---------------------------------------------
-
-    print("\n" + "=" * 70)
-    print("COMPARISON")
-    print("=" * 70)
-
-    print(f"Original Paragraph : {original_score}/100")
-    print(f"Shuffled Paragraph : {shuffled_score}/100")
-
-    difference = round(
-        original_score - shuffled_score,
-        2
-    )
-
-    print(f"Score Difference   : {difference}")
-
-    if difference > 0:
-        print(
-            "\nThe original sentence order has "
-            "more repeated entity transitions "
-            "according to this simplified model."
+from dotenv import load_dotenv
+
+load_dotenv()  # must run before the graph is imported
+
+import streamlit as st  # noqa: E402
+
+import ingest  # noqa: E402
+import kb  # noqa: E402
+
+st.set_page_config(page_title="Customer Support", layout="wide")
+
+SAMPLES = [
+    "What is your return policy?",
+    "How do I reset my password?",
+    "Where is my order #A1023?",
+    "My order is 3 weeks late and I want a refund!",
+    "Do you sell gift cards in Antarctica?",
+]
+ROUTE_LABELS = {
+    "escalation": "Escalation",
+    "off_topic": "Off-topic (polite redirect, no model call)",
+    "retrieval": "FAQ retrieval, then response generation",
+    "direct": "Direct response generation",
+}
+URGENCY_COLORS = {"low": "green", "medium": "orange", "high": "red"}
+
+
+@st.cache_resource
+def load_graph():
+    from graph import app  # built once, reused for every request
+
+    return app
+
+
+graph = load_graph()
+
+st.session_state.setdefault("messages", [])
+st.session_state.setdefault("latest", None)
+st.session_state.setdefault("upload_status", None)
+st.session_state.setdefault("uploader_key", 0)
+st.session_state.setdefault("pending", None)
+
+
+def run_query(query: str) -> None:
+    """Save the question first so it is never lost, then run the graph."""
+    st.session_state.messages.append({"role": "user", "content": query})
+    try:
+        result = graph.invoke(
+            {
+                "user_query": query,
+                "category": "",
+                "urgency": "",
+                "retrieved_docs": [],
+                "response": "",
+                "route": "",
+            }
         )
-
-    elif difference < 0:
-        print(
-            "\nThe shuffled sentence order has "
-            "more repeated entity transitions "
-            "according to this simplified model."
+    except Exception as exc:
+        st.session_state.messages.append(
+            {"role": "assistant",
+             "content": f"Sorry, something went wrong ({type(exc).__name__}). Please try again."}
         )
+        return
+    st.session_state.messages.append({"role": "assistant", "content": result["response"]})
+    st.session_state.latest = result
 
+
+# ---------------- Sidebar ----------------
+with st.sidebar:
+    st.header("📚 Knowledge base")
+    st.caption("Add PDF, TXT or DOCX files (max 5 MB). The bot will answer from them.")
+    uploaded = st.file_uploader(
+        "Upload a document",
+        type=None,  # validated in ingest so the user sees our own messages
+        label_visibility="collapsed",
+        key=f"uploader_{st.session_state.uploader_key}",
+    )
+    if uploaded is not None and st.button(
+        "Add to knowledge base", type="primary", use_container_width=True
+    ):
+        try:
+            count = ingest.process_upload(uploaded.name, uploaded.getvalue())
+            st.session_state.upload_status = (
+                "success", f"Upload complete: {count} sections added to the knowledge base")
+        except ingest.UploadError as exc:
+            st.session_state.upload_status = ("error", str(exc))
+        st.session_state.uploader_key += 1
+        st.rerun()
+
+    st.divider()
+    st.subheader("Uploaded documents")
+    docs = kb.list_documents()
+    if not docs:
+        st.caption("No documents uploaded yet.")
+    for doc in docs:
+        with st.container(border=True):
+            info_col, delete_col = st.columns([5, 1], vertical_alignment="center")
+            info_col.markdown(f"**📄 {doc['name']}**")
+            if delete_col.button("🗑️", key=f"rm_{doc['name']}", help="Delete this document"):
+                kb.remove_document(doc["name"])
+                st.session_state.upload_status = (
+                    "success", f"Deleted {doc['name']} and removed its sections from the knowledge base")
+                st.rerun()
+            st.caption(
+                f"{doc['type']} · {doc['size'] / 1024:.1f} KB · "
+                f"{doc['chunk_count']} sections · {doc['added']}"
+            )
+
+    st.divider()
+    st.subheader("Sample queries")
+    for i, sample in enumerate(SAMPLES):
+        if st.button(sample, key=f"sample_{i}", use_container_width=True):
+            st.session_state.pending = sample
+
+    st.divider()
+    if st.button("🧹 Clear chat", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.latest = None
+        st.rerun()
+
+# ---------------- Main area ----------------
+st.title("Customer Support")
+chat_col, details_col = st.columns([2, 1])
+
+typed = st.chat_input("Type your question")
+query = st.session_state.pending or typed
+st.session_state.pending = None
+
+with chat_col:
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+    if query and query.strip():
+        with st.chat_message("user"):  # shown right away, before the reply is ready
+            st.write(query.strip())
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                run_query(query.strip())
+            st.write(st.session_state.messages[-1]["content"])
+
+with details_col:
+    st.subheader("Behind the scenes")
+    status = st.session_state.upload_status
+    if status:
+        (st.success if status[0] == "success" else st.error)(status[1])
+    latest = st.session_state.latest
+    if latest is None:
+        st.caption("Send a message to see how it was handled.")
     else:
-        print(
-            "\nBoth versions received the same score."
-        )
-
-
-# Run program
-if __name__ == "__main__":
-    main()
+        st.markdown(f"**Category:** {latest['category'].replace('_', ' ').title()}")
+        color = URGENCY_COLORS.get(latest["urgency"], "gray")
+        st.markdown(f"**Urgency:** :{color}[{latest['urgency']}]")
+        st.markdown(f"**Route:** {ROUTE_LABELS.get(latest['route'], latest['route'])}")
+        st.markdown("**Retrieved entries:**")
+        if latest["retrieved_docs"]:
+            for d in latest["retrieved_docs"]:
+                question, _, answer = d.partition("\nA: ")
+                with st.expander(question.removeprefix("Q: "), expanded=True):
+                    st.write(answer)
+        else:
+            st.caption("No FAQ entry matched.")
