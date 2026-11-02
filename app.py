@@ -1,155 +1,210 @@
 
 import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
-from mlxtend.frequent_patterns import apriori, association_rules
+import fitz
+import requests
+import numpy as np
 
-# Page configuration
-st.set_page_config(page_title="Apriori Analysis", page_icon="🛒", layout="wide")
+OLLAMA_URL = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
+EMBED_MODEL = "nomic-embed-text"
 
-# Frontend
-st.title("🛒 Market Basket Analysis")
-st.subheader("Apriori Algorithm")
-st.write("Find frequently purchased products using association rules.")
+st.set_page_config(
+    page_title="TroubleMate AI",
+    page_icon="🔧",
+    layout="wide"
+)
 
-# Sidebar settings
-st.sidebar.header("Algorithm Settings")
-support = st.sidebar.slider("Minimum Support", 0.01, 0.5, 0.01)
-confidence = st.sidebar.slider("Minimum Confidence", 0.1, 1.0, 0.2)
+st.title("🔧 TroubleMate AI")
+st.subheader("AI-powered PDF Troubleshooting Assistant")
 
-# Upload dataset
-st.header("1. Upload Dataset")
-file = st.file_uploader("Upload Kaggle CSV file", type=["csv"])
+st.write(
+    "Upload a technical manual, describe your problem, "
+    "and receive step-by-step troubleshooting guidance."
+)
 
-if file is not None:
+def get_embeddings(texts):
+    response = requests.post(
+        f"{OLLAMA_URL}/api/embed",
+        json={
+            "model": EMBED_MODEL,
+            "input": texts
+        },
+        timeout=180
+    )
+    response.raise_for_status()
+    return np.array(response.json()["embeddings"])
 
-    df = pd.read_csv(file)
+def extract_pdf(pdf_file):
+    document = fitz.open(
+        stream=pdf_file,
+        filetype="pdf"
+    )
 
-    st.success("Dataset uploaded successfully!")
-    st.subheader("Dataset Preview")
-    st.dataframe(df.head())
+    chunks = []
 
-    # Backend preprocessing
-    required = ["Member_number", "Date", "itemDescription"]
+    for page_number, page in enumerate(document, start=1):
+        words = page.get_text().split()
 
-    if not all(col in df.columns for col in required):
-        st.error("Please upload the Groceries dataset with the correct columns.")
+        for i in range(0, len(words), 180):
+            content = " ".join(words[i:i+180])
 
-    else:
-        df = df.dropna(subset=required).copy()
+            if content.strip():
+                chunks.append({
+                    "text": content,
+                    "page": page_number
+                })
 
-        df["Transaction"] = (
-            df["Member_number"].astype(str) + "_" +
-            df["Date"].astype(str)
-        )
+    return chunks
 
-        basket = df.groupby(
-            ["Transaction", "itemDescription"]
-        ).size().unstack(fill_value=0)
+def find_relevant_chunks(question, chunks, vectors):
+    query_vector = get_embeddings([question])[0]
 
-        basket = (basket > 0).astype(int)
+    scores = vectors @ query_vector / (
+        np.linalg.norm(vectors, axis=1)
+        * np.linalg.norm(query_vector) + 1e-10
+    )
 
-        st.header("2. Preprocessed Dataset")
-        st.dataframe(basket.head())
+    best_indices = np.argsort(scores)[-4:][::-1]
 
-        # Run Apriori
-        if st.button("Run Apriori Algorithm"):
+    return [
+        chunks[i] for i in best_indices
+        if scores[i] > 0
+    ]
 
-            frequent = apriori(
-                basket,
-                min_support=support,
-                use_colnames=True
+def generate_answer(question, context):
+    prompt = f"""
+You are TroubleMate AI, a technical troubleshooting assistant.
+
+Answer using the supplied PDF information only.
+Do not invent technical instructions.
+
+If the PDF does not contain enough information,
+clearly explain that.
+
+User Problem:
+{question}
+
+Relevant PDF Information:
+{context}
+
+Provide your response in this format:
+
+1. Problem Explanation
+2. Possible Causes
+3. Step-by-Step Troubleshooting
+4. Expected Result
+5. Safety Precautions
+6. Relevant PDF Page Numbers
+"""
+
+    response = requests.post(
+        f"{OLLAMA_URL}/api/chat",
+        json={
+            "model": CHAT_MODEL,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False
+        },
+        timeout=300
+    )
+
+    response.raise_for_status()
+    return response.json()["message"]["content"]
+
+
+if "chunks" not in st.session_state:
+    st.session_state.chunks = None
+    st.session_state.vectors = None
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+uploaded_file = st.file_uploader(
+    "Upload Troubleshooting PDF",
+    type=["pdf"]
+)
+
+if uploaded_file:
+    if st.button("Process PDF", type="primary"):
+        try:
+            with st.spinner("Processing PDF..."):
+                chunks = extract_pdf(uploaded_file.getvalue())
+
+                if not chunks:
+                    st.error("No readable PDF text found.")
+                    st.stop()
+
+                vectors = get_embeddings(
+                    [chunk["text"] for chunk in chunks]
+                )
+
+                st.session_state.chunks = chunks
+                st.session_state.vectors = vectors
+                st.session_state.messages = []
+
+            st.success(
+                f"PDF processed successfully! "
+                f"{len(chunks)} sections indexed."
             )
 
-            st.header("3. Frequent Itemsets")
+        except Exception as error:
+            st.error(f"PDF processing error: {error}")
 
-            if frequent.empty:
-                st.warning("No frequent itemsets found. Reduce minimum support.")
+if st.session_state.chunks is not None:
 
-            else:
-                frequent["Items"] = frequent["itemsets"].apply(
-                    lambda x: ", ".join(sorted(x))
-                )
+    st.success("Your PDF knowledge base is ready!")
 
-                frequent_output = frequent[["Items", "support"]]
-                st.dataframe(frequent_output)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-                st.header("4. Association Rules")
+    question = st.chat_input(
+        "Describe your technical problem..."
+    )
 
-                if frequent["itemsets"].apply(len).max() >= 2:
+    if question:
 
-                    rules = association_rules(
-                        frequent,
-                        metric="confidence",
-                        min_threshold=confidence
+        st.session_state.messages.append({
+            "role": "user",
+            "content": question
+        })
+
+        with st.chat_message("user"):
+            st.write(question)
+
+        with st.chat_message("assistant"):
+            try:
+                with st.spinner("Analyzing your problem..."):
+
+                    relevant = find_relevant_chunks(
+                        question,
+                        st.session_state.chunks,
+                        st.session_state.vectors
                     )
 
-                else:
-                    rules = pd.DataFrame()
-
-                if rules.empty:
-                    st.warning("No association rules found. Reduce minimum confidence.")
-
-                else:
-                    rules["Antecedents"] = rules["antecedents"].apply(
-                        lambda x: ", ".join(sorted(x))
-                    )
-                    rules["Consequents"] = rules["consequents"].apply(
-                        lambda x: ", ".join(sorted(x))
+                    context = "\n\n".join(
+                        f"Page {chunk['page']}: "
+                        f"{chunk['text']}"
+                        for chunk in relevant
                     )
 
-                    output = rules[
-                        ["Antecedents", "Consequents",
-                         "support", "confidence", "lift"]
-                    ]
-
-                    st.dataframe(output)
-
-                # Dashboard
-                st.header("5. Analysis Dashboard")
-
-                c1, c2, c3 = st.columns(3)
-
-                c1.metric("Transactions", len(basket))
-                c2.metric("Products", len(basket.columns))
-                c3.metric("Frequent Itemsets", len(frequent))
-
-                # Visualization
-                st.header("6. Visualization")
-
-                top = frequent.sort_values(
-                    "support", ascending=False
-                ).head(10)
-
-                if not top.empty:
-                    fig, ax = plt.subplots(figsize=(10, 5))
-
-                    labels = top["itemsets"].apply(
-                        lambda x: ", ".join(sorted(x))
+                    answer = generate_answer(
+                        question,
+                        context
                     )
 
-                    ax.barh(labels, top["support"])
-                    ax.set_xlabel("Support")
-                    ax.set_title("Top 10 Frequent Itemsets")
-                    ax.invert_yaxis()
+                    st.markdown(answer)
 
-                    st.pyplot(fig)
-                    plt.close(fig)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": answer
+                    })
 
-                # Download
-                st.header("7. Download Results")
+            except Exception as error:
+                st.error(f"AI error: {error}")
 
-                st.download_button(
-                    "Download Frequent Itemsets",
-                    frequent_output.to_csv(index=False),
-                    "frequent_itemsets.csv"
-                )
-
-                if not rules.empty:
-                    st.download_button(
-                        "Download Association Rules",
-                        output.to_csv(index=False),
-                        "association_rules.csv"
-                    )
-
-                st.success("Apriori Analysis Completed Successfully!")
+st.divider()
+st.caption(
+    "Powered by Ollama | Llama 3.2 | Nomic Embeddings"
+)
