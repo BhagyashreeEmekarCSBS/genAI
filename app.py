@@ -1,110 +1,120 @@
 
-import streamlit as st
+from flask import Flask, request, render_template_string
 import requests
 
-# Page configuration
-st.set_page_config(
-    page_title="Local Coding Assistant",
-    page_icon="💻"
-)
+app = Flask(__name__)
 
-# Application heading
-st.title("Local AI Coding Assistant")
-st.write(
-    "An AI assistant that explains, corrects "
-    "and optimizes Python code using a local AI model."
-)
+# HTML and CSS for chatbot interface
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Local AI Chatbot</title>
+    <style>
+        body {
+            font-family: Arial;
+            background: #eef2f7;
+            text-align: center;
+            padding: 30px;
+        }
 
-# Ollama configuration
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "qwen:latest"
+        .container {
+            background: white;
+            max-width: 650px;
+            margin: auto;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 0 10px #ccc;
+        }
 
-# Input section
-code = st.text_area(
-    "Enter your Python code:",
-    height=200,
-    placeholder="Paste your Python code here..."
-)
+        h1 {
+            color: #334155;
+        }
 
-# Select operation
-operation = st.selectbox(
-    "Select an operation:",
-    [
-        "Explain Code",
-        "Correct Code",
-        "Optimize Code"
-    ]
-)
+        input {
+            width: 75%;
+            padding: 12px;
+            border: 1px solid #aaa;
+            border-radius: 6px;
+        }
 
-# Function to communicate with Ollama
-def get_ai_response(code, operation):
+        button {
+            padding: 12px 20px;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
 
-    prompts = {
-        "Explain Code":
-            "Explain this Python code step by step in simple language.",
+        .response {
+            margin-top: 25px;
+            padding: 15px;
+            background: #e0f2fe;
+            border-radius: 8px;
+            text-align: left;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
 
-        "Correct Code":
-                """Carefully analyze the Python code for syntax errors,
-    logical errors, and incorrect operations.
+<body>
+    <div class="container">
+        <h1>Local AI Chatbot</h1>
+        <p>Powered by Ollama and Llama 3.1 (8B)</p>
 
-    Understand the intended purpose from function names,
-    variable names, and code structure.
+        <form method="POST">
+            <input type="text" name="question"
+                   placeholder="Ask me anything..."
+                   required>
 
-    Identify every error and explain why it is incorrect.
-    Provide the complete corrected Python code.
-    Ensure the corrected code has valid Python syntax.
-    Do not add unnecessary brackets or change the
-    intended functionality.""",
+            <button type="submit">Send</button>
+        </form>
 
-        "Optimize Code":
-            "Optimize this Python code for better readability and efficiency. Explain the improvements."
-    }
+        {% if answer %}
+        <div class="response">
+            <h3>AI Response:</h3>
+            {{ answer }}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
-    prompt = prompts[operation] + "\n\nPython code:\n" + code
+@app.route("/", methods=["GET", "POST"])
+def chatbot():
 
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "stream": False
-    }
+    answer = ""
 
-    response = requests.post(
-        OLLAMA_URL,
-        json=payload,
-        timeout=300
-    )
+    if request.method == "POST":
 
-    response.raise_for_status()
-
-    return response.json()["message"]["content"]
-
-
-# Generate response
-if st.button("Generate AI Response"):
-
-    if code.strip():
+        question = request.form["question"]
 
         try:
-            with st.spinner("AI is analyzing your code..."):
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+    "model": "llama3.1:8b",
+    "prompt": question,
+    "stream": False,
+    "keep_alive": "10m",
+    "options": {
+        "num_predict": 200
+    }
+},
+                timeout=300
+            )
 
-                result = get_ai_response(code, operation)
+            response.raise_for_status()
 
-            st.subheader("AI Assistant Response")
-            st.markdown(result)
-
-        except requests.exceptions.ConnectionError:
-            st.error("Ollama is not running. Please start Ollama.")
+            answer = response.json()["response"]
 
         except requests.exceptions.RequestException as e:
-            st.error(f"Request failed: {e}")
+            answer = "Error connecting to Ollama: " + str(e)
 
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+    return render_template_string(HTML, answer=answer)
 
-    else:
-        st.warning("Please enter Python code first.")
+
+if __name__ == "__main__":
+    app.run(debug=True)
