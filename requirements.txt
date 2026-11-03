@@ -1,11 +1,4 @@
-langgraph
-langchain
-langchain-core
-langchain-openai
-langchain-groq
-langchain-google-genai
-python-dotenv
 streamlit
-faiss-cpu
-pypdf
-python-docx
+pandas
+mlxtend
+matplotlib

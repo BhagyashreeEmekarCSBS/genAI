@@ -1,161 +1,155 @@
-from dotenv import load_dotenv
 
-load_dotenv()  # must run before the graph is imported
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+from mlxtend.frequent_patterns import apriori, association_rules
 
-import streamlit as st  # noqa: E402
+# Page configuration
+st.set_page_config(page_title="Apriori Analysis", page_icon="🛒", layout="wide")
 
-import ingest  # noqa: E402
-import kb  # noqa: E402
+# Frontend
+st.title("🛒 Market Basket Analysis")
+st.subheader("Apriori Algorithm")
+st.write("Find frequently purchased products using association rules.")
 
-st.set_page_config(page_title="Customer Support", layout="wide")
+# Sidebar settings
+st.sidebar.header("Algorithm Settings")
+support = st.sidebar.slider("Minimum Support", 0.01, 0.5, 0.01)
+confidence = st.sidebar.slider("Minimum Confidence", 0.1, 1.0, 0.2)
 
-SAMPLES = [
-    "What is your return policy?",
-    "How do I reset my password?",
-    "Where is my order #A1023?",
-    "My order is 3 weeks late and I want a refund!",
-    "Do you sell gift cards in Antarctica?",
-]
-ROUTE_LABELS = {
-    "escalation": "Escalation",
-    "off_topic": "Off-topic (polite redirect, no model call)",
-    "retrieval": "FAQ retrieval, then response generation",
-    "direct": "Direct response generation",
-}
-URGENCY_COLORS = {"low": "green", "medium": "orange", "high": "red"}
+# Upload dataset
+st.header("1. Upload Dataset")
+file = st.file_uploader("Upload Kaggle CSV file", type=["csv"])
 
+if file is not None:
 
-@st.cache_resource
-def load_graph():
-    from graph import app  # built once, reused for every request
+    df = pd.read_csv(file)
 
-    return app
+    st.success("Dataset uploaded successfully!")
+    st.subheader("Dataset Preview")
+    st.dataframe(df.head())
 
+    # Backend preprocessing
+    required = ["Member_number", "Date", "itemDescription"]
 
-graph = load_graph()
+    if not all(col in df.columns for col in required):
+        st.error("Please upload the Groceries dataset with the correct columns.")
 
-st.session_state.setdefault("messages", [])
-st.session_state.setdefault("latest", None)
-st.session_state.setdefault("upload_status", None)
-st.session_state.setdefault("uploader_key", 0)
-st.session_state.setdefault("pending", None)
+    else:
+        df = df.dropna(subset=required).copy()
 
-
-def run_query(query: str) -> None:
-    """Save the question first so it is never lost, then run the graph."""
-    st.session_state.messages.append({"role": "user", "content": query})
-    try:
-        result = graph.invoke(
-            {
-                "user_query": query,
-                "category": "",
-                "urgency": "",
-                "retrieved_docs": [],
-                "response": "",
-                "route": "",
-            }
+        df["Transaction"] = (
+            df["Member_number"].astype(str) + "_" +
+            df["Date"].astype(str)
         )
-    except Exception as exc:
-        st.session_state.messages.append(
-            {"role": "assistant",
-             "content": f"Sorry, something went wrong ({type(exc).__name__}). Please try again."}
-        )
-        return
-    st.session_state.messages.append({"role": "assistant", "content": result["response"]})
-    st.session_state.latest = result
 
+        basket = df.groupby(
+            ["Transaction", "itemDescription"]
+        ).size().unstack(fill_value=0)
 
-# ---------------- Sidebar ----------------
-with st.sidebar:
-    st.header("📚 Knowledge base")
-    st.caption("Add PDF, TXT or DOCX files (max 5 MB). The bot will answer from them.")
-    uploaded = st.file_uploader(
-        "Upload a document",
-        type=None,  # validated in ingest so the user sees our own messages
-        label_visibility="collapsed",
-        key=f"uploader_{st.session_state.uploader_key}",
-    )
-    if uploaded is not None and st.button(
-        "Add to knowledge base", type="primary", use_container_width=True
-    ):
-        try:
-            count = ingest.process_upload(uploaded.name, uploaded.getvalue())
-            st.session_state.upload_status = (
-                "success", f"Upload complete: {count} sections added to the knowledge base")
-        except ingest.UploadError as exc:
-            st.session_state.upload_status = ("error", str(exc))
-        st.session_state.uploader_key += 1
-        st.rerun()
+        basket = (basket > 0).astype(int)
 
-    st.divider()
-    st.subheader("Uploaded documents")
-    docs = kb.list_documents()
-    if not docs:
-        st.caption("No documents uploaded yet.")
-    for doc in docs:
-        with st.container(border=True):
-            info_col, delete_col = st.columns([5, 1], vertical_alignment="center")
-            info_col.markdown(f"**📄 {doc['name']}**")
-            if delete_col.button("🗑️", key=f"rm_{doc['name']}", help="Delete this document"):
-                kb.remove_document(doc["name"])
-                st.session_state.upload_status = (
-                    "success", f"Deleted {doc['name']} and removed its sections from the knowledge base")
-                st.rerun()
-            st.caption(
-                f"{doc['type']} · {doc['size'] / 1024:.1f} KB · "
-                f"{doc['chunk_count']} sections · {doc['added']}"
+        st.header("2. Preprocessed Dataset")
+        st.dataframe(basket.head())
+
+        # Run Apriori
+        if st.button("Run Apriori Algorithm"):
+
+            frequent = apriori(
+                basket,
+                min_support=support,
+                use_colnames=True
             )
 
-    st.divider()
-    st.subheader("Sample queries")
-    for i, sample in enumerate(SAMPLES):
-        if st.button(sample, key=f"sample_{i}", use_container_width=True):
-            st.session_state.pending = sample
+            st.header("3. Frequent Itemsets")
 
-    st.divider()
-    if st.button("🧹 Clear chat", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.latest = None
-        st.rerun()
+            if frequent.empty:
+                st.warning("No frequent itemsets found. Reduce minimum support.")
 
-# ---------------- Main area ----------------
-st.title("Customer Support")
-chat_col, details_col = st.columns([2, 1])
+            else:
+                frequent["Items"] = frequent["itemsets"].apply(
+                    lambda x: ", ".join(sorted(x))
+                )
 
-typed = st.chat_input("Type your question")
-query = st.session_state.pending or typed
-st.session_state.pending = None
+                frequent_output = frequent[["Items", "support"]]
+                st.dataframe(frequent_output)
 
-with chat_col:
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-    if query and query.strip():
-        with st.chat_message("user"):  # shown right away, before the reply is ready
-            st.write(query.strip())
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                run_query(query.strip())
-            st.write(st.session_state.messages[-1]["content"])
+                st.header("4. Association Rules")
 
-with details_col:
-    st.subheader("Behind the scenes")
-    status = st.session_state.upload_status
-    if status:
-        (st.success if status[0] == "success" else st.error)(status[1])
-    latest = st.session_state.latest
-    if latest is None:
-        st.caption("Send a message to see how it was handled.")
-    else:
-        st.markdown(f"**Category:** {latest['category'].replace('_', ' ').title()}")
-        color = URGENCY_COLORS.get(latest["urgency"], "gray")
-        st.markdown(f"**Urgency:** :{color}[{latest['urgency']}]")
-        st.markdown(f"**Route:** {ROUTE_LABELS.get(latest['route'], latest['route'])}")
-        st.markdown("**Retrieved entries:**")
-        if latest["retrieved_docs"]:
-            for d in latest["retrieved_docs"]:
-                question, _, answer = d.partition("\nA: ")
-                with st.expander(question.removeprefix("Q: "), expanded=True):
-                    st.write(answer)
-        else:
-            st.caption("No FAQ entry matched.")
+                if frequent["itemsets"].apply(len).max() >= 2:
+
+                    rules = association_rules(
+                        frequent,
+                        metric="confidence",
+                        min_threshold=confidence
+                    )
+
+                else:
+                    rules = pd.DataFrame()
+
+                if rules.empty:
+                    st.warning("No association rules found. Reduce minimum confidence.")
+
+                else:
+                    rules["Antecedents"] = rules["antecedents"].apply(
+                        lambda x: ", ".join(sorted(x))
+                    )
+                    rules["Consequents"] = rules["consequents"].apply(
+                        lambda x: ", ".join(sorted(x))
+                    )
+
+                    output = rules[
+                        ["Antecedents", "Consequents",
+                         "support", "confidence", "lift"]
+                    ]
+
+                    st.dataframe(output)
+
+                # Dashboard
+                st.header("5. Analysis Dashboard")
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric("Transactions", len(basket))
+                c2.metric("Products", len(basket.columns))
+                c3.metric("Frequent Itemsets", len(frequent))
+
+                # Visualization
+                st.header("6. Visualization")
+
+                top = frequent.sort_values(
+                    "support", ascending=False
+                ).head(10)
+
+                if not top.empty:
+                    fig, ax = plt.subplots(figsize=(10, 5))
+
+                    labels = top["itemsets"].apply(
+                        lambda x: ", ".join(sorted(x))
+                    )
+
+                    ax.barh(labels, top["support"])
+                    ax.set_xlabel("Support")
+                    ax.set_title("Top 10 Frequent Itemsets")
+                    ax.invert_yaxis()
+
+                    st.pyplot(fig)
+                    plt.close(fig)
+
+                # Download
+                st.header("7. Download Results")
+
+                st.download_button(
+                    "Download Frequent Itemsets",
+                    frequent_output.to_csv(index=False),
+                    "frequent_itemsets.csv"
+                )
+
+                if not rules.empty:
+                    st.download_button(
+                        "Download Association Rules",
+                        output.to_csv(index=False),
+                        "association_rules.csv"
+                    )
+
+                st.success("Apriori Analysis Completed Successfully!")
